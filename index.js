@@ -1239,11 +1239,14 @@ client.on('interactionCreate', async interaction => {
       const cardNameParts = card.name.split(' ');
       const cardName = cardNameParts[0];
       const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
+      const choiceEmoji = ['1️⃣', '2️⃣', '3️⃣'][index];
       
-      return interaction.update({ 
-        content: `## \u2705 ${cardName}\n**Set:** ${card.set} | **Quality:** ${quality}`,
-        files: [card.imageUrl],
-        components: []
+      // Keep the original message and add a reply showing the choice
+      await interaction.deferUpdate();
+      
+      return interaction.followUp({
+        content: `✅ <@${user.id}> chose **${choiceEmoji} ${cardName}**\n**Set:** ${card.set} | **Quality:** ${quality}`,
+        files: [card.imageUrl]
       });
     }
   }
