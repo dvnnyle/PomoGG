@@ -15,17 +15,6 @@ const { createClient } = require('@supabase/supabase-js');
 const { createCanvas, loadImage } = require('canvas');
 const axios = require('axios');
 const { AttachmentBuilder } = require('discord.js');
-const http = require('http');
-
-// Simple HTTP server for Render (keeps service alive)
-const PORT = process.env.PORT || 3000;
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('PomoGG Discord Bot is running!');
-});
-server.listen(PORT, () => {
-  console.log(`HTTP server listening on port ${PORT}`);
-});
 
 // ------------------- DISCORD CLIENT -------------------
 const client = new Client({
@@ -41,7 +30,7 @@ const TEST_MODE = process.env.TEST_MODE === 'true';
 const PRELOAD_IMAGES = process.env.PRELOAD_IMAGES === 'true'; // Enable/disable image preloading
 
 // cooldowns (ms)
-const DRAW_COOLDOWN = TEST_MODE ? 0 : 5 * 60 * 1000;   // 0s vs 5min
+const DRAW_COOLDOWN = TEST_MODE ? 0 : 15 * 60 * 1000;   // 0s vs 15min
 const PACK_COOLDOWN = TEST_MODE ? 0 : 10 * 60 * 1000;   // 0s vs 10min
 const PICK_COOLDOWN = TEST_MODE ? 0 : 30 * 60 * 1000;  // 0s vs 30min
 
@@ -65,7 +54,7 @@ const cardSets = [
   { bucket: 'crowZenith', displayName: 'Crown Zenith' },
   { bucket: 'vividVoltage', displayName: 'Vivid Voltage' },
   // { bucket: 'whiteFlare', displayName: 'White Flare' }, // Temporarily disabled
-  { bucket: 'BlackBolt', displayName: 'Black Bolt' },
+  // { bucket: 'BlackBolt', displayName: 'Black Bolt' }, // Temporarily disabled
   { bucket: 'evolvingSkies', displayName: 'Evolving Skies' }
 ];
 
@@ -284,6 +273,60 @@ const imageCache = new Map();
 // Combined image cache (for pick command)
 const combinedImageCache = new Map();
 
+// Server configuration (guild_id -> channel_id)
+const serverConfig = new Map();
+
+// Load server configurations from database
+async function loadServerConfigs() {
+  try {
+    const { data, error } = await supabase
+      .from('server_config')
+      .select('*');
+    
+    if (error) {
+      console.error('Error loading server configs:', error);
+      return;
+    }
+    
+    if (data) {
+      data.forEach(config => {
+        serverConfig.set(config.guild_id, config.channel_id);
+      });
+      console.log(`Loaded ${data.length} server configurations`);
+    }
+  } catch (error) {
+    console.error('Error in loadServerConfigs:', error);
+  }
+}
+
+// Set channel for a guild
+async function setGuildChannel(guildId, channelId) {
+  try {
+    serverConfig.set(guildId, channelId);
+    
+    await supabase
+      .from('server_config')
+      .upsert({
+        guild_id: guildId,
+        channel_id: channelId
+      });
+    
+    return true;
+  } catch (error) {
+    console.error('Error setting guild channel:', error);
+    return false;
+  }
+}
+
+// Check if command is allowed in this channel
+function isAllowedChannel(guildId, channelId) {
+  // If no config set for this guild, allow all channels
+  if (!serverConfig.has(guildId)) return true;
+  
+  // Check if this channel matches the configured channel
+  return serverConfig.get(guildId) === channelId;
+}
+
 // Function to fetch and cache image
 async function fetchAndCacheImage(url) {
   // Check if already cached
@@ -495,7 +538,21 @@ const commands = [
       option.setName('name')
         .setDescription('Card name to search for')
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('setchannel')
+    .setDescription('Set the channel where bot commands are allowed (Admin only)')
+    .addChannelOption(option =>
+      option.setName('channel')
+        .setDescription('The channel to allow commands in')
+        .setRequired(true)
     )
+    .setDefaultMemberPermissions(0x8), // Administrator permission
+
+  new SlashCommandBuilder()
+    .setName('channelinfo')
+    .setDescription('Show which channel is configured for bot commands')
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -514,8 +571,9 @@ async function registerCommands() {
 }
 
 // ------------------- BOT EVENTS -------------------
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  await loadServerConfigs();
 });
 
 // Handle text commands
@@ -526,6 +584,11 @@ client.on('messageCreate', async message => {
   
   // Check if it's a valid command
   if (!command.startsWith('kd') && command !== 'pick' && command !== 'pk') return;
+
+  // Check if command is allowed in this channel
+  if (!isAllowedChannel(message.guild?.id, message.channel.id)) {
+    return message.reply('❌ Commands are not allowed in this channel. Ask an admin to use `/setchannel` to configure.');
+  }
 
   const user = message.author;
   const now = Date.now();
@@ -719,8 +782,62 @@ client.on('messageCreate', async message => {
 });
 
 client.on('interactionCreate', async interaction => {
+  // Handle slash commands
+  if (interaction.isChatInputCommand()) {
+    // Handle /setchannel command
+    if (interaction.commandName === 'setchannel') {
+      const channel = interaction.options.getChannel('channel');
+      const success = await setGuildChannel(interaction.guild.id, channel.id);
+      
+      if (success) {
+        return interaction.reply({
+          content: `✅ Bot commands are now restricted to <#${channel.id}>`,
+          ephemeral: true
+        });
+      } else {
+        return interaction.reply({
+          content: '❌ Failed to set channel configuration.',
+          ephemeral: true
+        });
+      }
+    }
+
+    // Handle /channelinfo command
+    if (interaction.commandName === 'channelinfo') {
+      const guildId = interaction.guild?.id;
+      const channelId = serverConfig.get(guildId);
+      
+      if (!channelId) {
+        return interaction.reply({
+          content: '📋 No channel restriction set. Commands work in all channels.\n\n*Admins can use `/setchannel` to restrict to a specific channel.*',
+          ephemeral: true
+        });
+      }
+      
+      return interaction.reply({
+        content: `📋 Bot commands are restricted to: <#${channelId}>\n\n*Admins can use \`/setchannel\` to change it.*`,
+        ephemeral: true
+      });
+    }
+
+    // Check if command is allowed in this channel (except setchannel and channelinfo)
+    if (interaction.commandName !== 'channelinfo' && !isAllowedChannel(interaction.guild?.id, interaction.channel.id)) {
+      return interaction.reply({
+        content: '❌ Commands are not allowed in this channel. Ask an admin to use `/setchannel` to configure.',
+        ephemeral: true
+      });
+    }
+  }
+
   // Handle button clicks
   if (interaction.isButton()) {
+    // Check if button interactions are allowed in this channel
+    if (!isAllowedChannel(interaction.guild?.id, interaction.channel.id)) {
+      return interaction.reply({
+        content: '❌ Commands are not allowed in this channel.',
+        ephemeral: true
+      });
+    }
     const { customId, user } = interaction;
     const now = Date.now();
     const data = await getUserData(user.id);
