@@ -821,7 +821,8 @@ client.on('interactionCreate', async interaction => {
     }
 
     // Check if command is allowed in this channel (except setchannel and channelinfo)
-    if (interaction.commandName !== 'channelinfo' && !isAllowedChannel(interaction.guild?.id, interaction.channel.id)) {
+    const exemptCommands = ['setchannel', 'channelinfo'];
+    if (!exemptCommands.includes(interaction.commandName) && !isAllowedChannel(interaction.guild?.id, interaction.channel.id)) {
       return interaction.reply({
         content: '❌ Commands are not allowed in this channel. Ask an admin to use `/setchannel` to configure.',
         ephemeral: true
