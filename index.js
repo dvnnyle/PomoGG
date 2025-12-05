@@ -476,15 +476,11 @@ const commands = [
     .setDescription('Open 1 pack of 5 cards (every 30 minutes, shorter in test mode)'),
 
   new SlashCommandBuilder()
-    .setName('inventory')
-    .setDescription('Show your card collection'),
-
-  new SlashCommandBuilder()
     .setName('trash')
     .setDescription('Trash a card from your inventory')
     .addIntegerOption(option =>
       option.setName('index')
-        .setDescription('Card index from /inventory (starting at 0)')
+        .setDescription('Card index from /binder (starting at 0)')
         .setRequired(true)
     ),
 
@@ -768,7 +764,6 @@ client.on('messageCreate', async message => {
       '`/draw` - Draw a card\n' +
       '`/pack` - Open a pack\n' +
       '`/pick` - Pick from 3 cards\n' +
-      '`/inventory` - View your collection\n' +
       '`/binder` - View organized binder\n' +
       '`/menu` - Interactive button menu\n' +
       '`/search <name>` - Search for cards by name\n' +
@@ -1192,12 +1187,6 @@ client.on('interactionCreate', async interaction => {
     );
   }
 
-  // -------- /inventory --------
-  if (commandName === 'inventory') {
-    const text = formatInventory(data.inventory);
-    return interaction.reply(text);
-  }
-
   // -------- /binder --------
   if (commandName === 'binder') {
     const page = 0;
@@ -1230,7 +1219,7 @@ client.on('interactionCreate', async interaction => {
 
     if (index < 0 || index >= data.inventory.length) {
       return interaction.reply({
-        content: '❌ Invalid index. Use `/inventory` to see valid indices.',
+        content: '❌ Invalid index. Use `/binder` or text command to see valid indices.',
         ephemeral: true
       });
     }
@@ -1512,7 +1501,6 @@ client.on('interactionCreate', async interaction => {
         '`/draw` - Draw a card\n' +
         '`/pack` - Open a pack\n' +
         '`/pick` - Pick from 3 cards\n' +
-        '`/inventory` - View your collection\n' +
         '`/binder` - View organized binder\n' +
         '`/menu` - Interactive button menu\n' +
         '`/search <name>` - Search for cards by name\n' +
