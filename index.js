@@ -917,6 +917,16 @@ client.on('interactionCreate', async interaction => {
 
     // Handle /setadmin command
     if (interaction.commandName === 'setadmin') {
+      // Bootstrap: If no admins exist yet AND user is server owner, make them admin
+      if (adminUsers.size === 0 && interaction.guild?.ownerId === interaction.user.id) {
+        await addAdmin(interaction.user.id);
+        await interaction.reply({
+          content: '✅ Welcome! You have been set as the first admin. You can now manage other admins.',
+          ephemeral: true
+        });
+        // Let them continue to use the command
+      }
+      
       // Check if user is admin
       if (!isAdmin(interaction.user.id)) {
         return interaction.reply({
