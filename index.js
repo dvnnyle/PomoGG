@@ -1246,8 +1246,11 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: '❌ Invalid choice.', ephemeral: true });
       }
 
+      // Defer update FIRST before any async operations
+      await interaction.deferUpdate();
+
       const instanceId = generateCardInstanceId();
-      data.inventory.push({ cardId: card.id, obtainedAt: now, instance_id: instanceId });
+      data.inventory.push({ card_id: card.id, obtained_at: now, instance_id: instanceId });
       await addCardToInventory(user.id, card.id, now, instanceId);
       data.pickChoices = [];
 
@@ -1255,9 +1258,6 @@ client.on('interactionCreate', async interaction => {
       const cardName = cardNameParts[0];
       const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
       const choiceEmoji = ['1️⃣', '2️⃣', '3️⃣'][index];
-      
-      // Keep the original message and add a reply showing the choice
-      await interaction.deferUpdate();
       
       return interaction.followUp({
         content: `✅ <@${user.id}> chose **${choiceEmoji} ${cardName}**\n**Set:** ${card.set} | **Quality:** ${quality}`,
