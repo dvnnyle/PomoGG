@@ -638,6 +638,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName('clearbinder')
     .setDescription('Clear your entire card collection and start fresh')
+    .addStringOption(option =>
+      option.setName('confirm')
+        .setDescription('Type your username (e.g., @yourname) to confirm')
+        .setRequired(true)
+    )
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -1430,7 +1435,25 @@ client.on('interactionCreate', async interaction => {
 
   // -------- /clearbinder --------
   if (commandName === 'clearbinder') {
+    const confirmText = interaction.options.getString('confirm');
+    const expectedConfirm = `@${user.username}`;
+    
+    // Check if confirmation matches username
+    if (confirmText !== expectedConfirm) {
+      return interaction.reply({
+        content: `❌ Confirmation failed. You must type **${expectedConfirm}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
+        ephemeral: true
+      });
+    }
+
     const cardCount = data.inventory.length;
+    
+    if (cardCount === 0) {
+      return interaction.reply({
+        content: '❌ Your binder is already empty!',
+        ephemeral: true
+      });
+    }
     
     // Clear memory
     data.inventory = [];
