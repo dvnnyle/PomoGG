@@ -640,7 +640,7 @@ const commands = [
     .setDescription('Clear your entire card collection and start fresh')
     .addStringOption(option =>
       option.setName('confirm')
-        .setDescription('Type your username (e.g., @yourname) to confirm')
+        .setDescription('Type your display name (e.g., @danny) to confirm')
         .setRequired(true)
     )
 ].map(cmd => cmd.toJSON());
@@ -1445,20 +1445,14 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'clearbinder') {
     const confirmText = interaction.options.getString('confirm');
     
-    // Get both username and display name (server nickname)
-    const username = `@${user.username}`;
-    const displayName = interaction.member?.displayName ? `@${interaction.member.displayName}` : null;
+    // Get display name (server nickname) or fallback to username
+    const displayName = interaction.member?.displayName || user.username;
+    const expectedConfirm = `@${displayName}`;
     
-    // Check if confirmation matches either username or display name
-    const isValidConfirm = confirmText === username || (displayName && confirmText === displayName);
-    
-    if (!isValidConfirm) {
-      const validOptions = displayName && displayName !== username 
-        ? `**${username}** or **${displayName}**`
-        : `**${username}**`;
-      
+    // Check if confirmation matches
+    if (confirmText !== expectedConfirm) {
       return interaction.reply({
-        content: `❌ Confirmation failed. You must type ${validOptions} exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
+        content: `❌ Confirmation failed. You must type **${expectedConfirm}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
         ephemeral: true
       });
     }
