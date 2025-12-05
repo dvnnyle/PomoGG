@@ -15,6 +15,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { createCanvas, loadImage } = require('canvas');
 const axios = require('axios');
 const { AttachmentBuilder } = require('discord.js');
+const http = require('http');
 
 // ------------------- DISCORD CLIENT -------------------
 const client = new Client({
@@ -1833,6 +1834,28 @@ client.on('interactionCreate', async interaction => {
       components: [row]
     });
   }
+});
+
+// ------------------- HTTP SERVER (KEEP-ALIVE) -------------------
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ 
+      status: 'alive', 
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    }));
+  } else {
+    res.writeHead(404);
+    res.end('Not Found');
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 HTTP server running on port ${PORT}`);
+  console.log(`📍 Health check: http://localhost:${PORT}/health`);
 });
 
 // ------------------- STARTUP -------------------
