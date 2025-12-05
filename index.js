@@ -674,7 +674,7 @@ client.on('messageCreate', async message => {
   const command = message.content.toLowerCase().trim();
   
   // Check if it's a valid command
-  if (!command.startsWith('kd') && command !== 'pick' && command !== 'pk') return;
+  if (!command.startsWith('cd') && command !== 'pick' && command !== 'pk') return;
 
   // Check if command is allowed in this channel
   if (!isAllowedChannel(message.guild?.id, message.channel.id)) {
@@ -685,8 +685,8 @@ client.on('messageCreate', async message => {
   const now = Date.now();
   const data = await getUserData(user.id);
 
-  // kd (default to draw)
-  if (command === 'kd' || command === 'kd draw' || command === 'kd d') {
+  // cd (default to draw)
+  if (command === 'cd' || command === 'cd draw' || command === 'cd d') {
     const elapsed = now - data.lastDraw;
     if (elapsed < DRAW_COOLDOWN) {
       const remaining = DRAW_COOLDOWN - elapsed;
@@ -718,8 +718,8 @@ client.on('messageCreate', async message => {
     });
   }
 
-  // kd pack
-  if (command === 'kd pack' || command === 'kd p') {
+  // cd pack
+  if (command === 'cd pack' || command === 'cd p') {
     const elapsed = now - data.lastPack;
     if (elapsed < PACK_COOLDOWN) {
       const remaining = PACK_COOLDOWN - elapsed;
@@ -746,14 +746,14 @@ client.on('messageCreate', async message => {
     return loadingMsg.edit(`🃏 You opened a pack and got:\n${summary}`);
   }
 
-  // kd inventory
-  if (command === 'kd inventory' || command === 'kd inv' || command === 'kd i') {
+  // cd inventory
+  if (command === 'cd inventory' || command === 'cd inv' || command === 'cd i') {
     const text = formatInventory(data.inventory);
     return message.reply(text);
   }
 
-  // kd binder
-  if (command === 'kd binder' || command === 'kd b' || command === 'binder') {
+  // cd binder
+  if (command === 'cd binder' || command === 'cd b' || command === 'binder') {
     const page = 0;
     const { embed, totalPages } = formatBinderEmbed(data.inventory, page);
     
@@ -778,8 +778,8 @@ client.on('messageCreate', async message => {
     return message.reply({ embeds: [embed], components: [row] });
   }
 
-  // kd pick / pk
-  if (command === 'kd pick' || command === 'kd pk' || command === 'pk' || command === 'pick') {
+  // cd pick / pk
+  if (command === 'cd pick' || command === 'cd pk' || command === 'pk' || command === 'pick') {
     const elapsed = now - data.lastPick;
     if (elapsed < PICK_COOLDOWN) {
       const remaining = PICK_COOLDOWN - elapsed;
@@ -826,15 +826,15 @@ client.on('messageCreate', async message => {
         new ButtonBuilder()
           .setCustomId('btn_pick_0')
           .setLabel('1️⃣')
-          .setStyle(ButtonStyle.Primary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_1')
           .setLabel('2️⃣')
-          .setStyle(ButtonStyle.Primary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_2')
           .setLabel('3️⃣')
-          .setStyle(ButtonStyle.Primary)
+          .setStyle(ButtonStyle.Success)
       );
 
     return loadingMsg.edit({
@@ -844,17 +844,17 @@ client.on('messageCreate', async message => {
     });
   }
 
-  // kd help
-  if (command === 'kd help' || command === 'help') {
+  // cd help
+  if (command === 'cd help' || command === 'help') {
     return message.reply(
       '**Card Game Commands:**\n\n' +
       '**Text Commands:**\n' +
-      '`kd` or `kd draw` - Draw a card (15 min cooldown)\n' +
-      '`kd pack` or `kd p` - Open a pack of 5 cards (10 min cooldown)\n' +
+      '`cd` or `cd draw` - Draw a card (15 min cooldown)\n' +
+      '`cd pack` or `cd p` - Open a pack of 5 cards (10 min cooldown)\n' +
       '`pick` or `pk` - Pick 1 from 3 cards (30 min cooldown)\n' +
-      '`kd inventory`, `kd inv`, or `kd i` - View your collection\n' +
-      '`binder`, `kd binder`, or `kd b` - View organized binder\n' +
-      '`help` or `kd help` - Show this help\n\n' +
+      '`cd inventory`, `cd inv`, or `cd i` - View your collection\n' +
+      '`binder`, `cd binder`, or `cd b` - View organized binder\n' +
+      '`help` or `cd help` - Show this help\n\n' +
       '**Slash Commands:**\n' +
       '`/draw` - Draw a card\n' +
       '`/pack` - Open a pack\n' +
@@ -1728,12 +1728,12 @@ client.on('interactionCreate', async interaction => {
       content: 
         '**Card Game Commands:**\n\n' +
         '**Text Commands:**\n' +
-        '`kd` or `kd draw` - Draw a card (15 min cooldown)\n' +
-        '`kd pack` or `kd p` - Open a pack of 5 cards (10 min cooldown)\n' +
+        '`cd` or `cd draw` - Draw a card (15 min cooldown)\n' +
+        '`cd pack` or `cd p` - Open a pack of 5 cards (10 min cooldown)\n' +
         '`pick` or `pk` - Pick 1 from 3 cards (30 min cooldown)\n' +
-        '`kd inventory`, `kd inv`, or `kd i` - View your collection\n' +
-        '`binder`, `kd binder`, or `kd b` - View organized binder\n' +
-        '`help` or `kd help` - Show this help\n\n' +
+        '`cd inventory`, `cd inv`, or `cd i` - View your collection\n' +
+        '`binder`, `cd binder`, or `cd b` - View organized binder\n' +
+        '`help` or `cd help` - Show this help\n\n' +
         '**Slash Commands:**\n' +
         '`/draw` - Draw a card\n' +
         '`/pack` - Open a pack\n' +
@@ -1816,15 +1816,15 @@ client.on('interactionCreate', async interaction => {
         new ButtonBuilder()
           .setCustomId('btn_pick_0')
           .setLabel('1️⃣')
-          .setStyle(ButtonStyle.Primary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_1')
           .setLabel('2️⃣')
-          .setStyle(ButtonStyle.Primary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_2')
           .setLabel('3️⃣')
-          .setStyle(ButtonStyle.Primary)
+          .setStyle(ButtonStyle.Success)
       );
 
     return interaction.editReply({
