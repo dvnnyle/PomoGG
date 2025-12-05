@@ -543,11 +543,11 @@ const commands = [
     .setDescription('Open 1 pack of 5 cards (every 30 minutes, shorter in test mode)'),
 
   new SlashCommandBuilder()
-    .setName('trash')
-    .setDescription('Trash a card from your inventory')
-    .addIntegerOption(option =>
-      option.setName('index')
-        .setDescription('Card index from /binder (starting at 0)')
+    .setName('burn')
+    .setDescription('Burn a card from your inventory (permanent deletion)')
+    .addStringOption(option =>
+      option.setName('card')
+        .setDescription('Card ID to burn (e.g., poqpvv)')
         .setRequired(true)
     ),
 
@@ -640,7 +640,7 @@ const commands = [
     .setDescription('Clear your entire card collection and start fresh')
     .addStringOption(option =>
       option.setName('confirm')
-        .setDescription('Type your display name (e.g., danny) to confirm')
+        .setDescription('Type your username to confirm')
         .setRequired(true)
     )
 ].map(cmd => cmd.toJSON());
@@ -661,7 +661,7 @@ async function registerCommands() {
 }
 
 // ------------------- BOT EVENTS -------------------
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await loadServerConfigs();
   await loadAdmins();
@@ -864,7 +864,7 @@ client.on('messageCreate', async message => {
       '`/search <name>` - Search for cards by name\n' +
       '`/view <card>` - View a specific card\n' +
       '`/trade <card> <@trainer>` - Trade a card to another trainer\n' +
-      '`/trash <index>` - Remove a card\n' +
+      '`/burn <card>` - Burn a card (permanent deletion)\n' +
       '`/clearbinder <confirm>` - Clear your entire collection (type your display name)\n' +
       '`/reset_me` - Reset your data (testing)\n\n' +
       '**Admin Commands:**\n' +
@@ -1270,7 +1270,6 @@ client.on('interactionCreate', async interaction => {
 
   const { commandName, user } = interaction;
   const now = Date.now();
-  const data = await getUserData(user.id);
 
   // Safety: no cards loaded
   if ((commandName === 'draw' || commandName === 'pack') && !cards.length) {
@@ -1279,6 +1278,9 @@ client.on('interactionCreate', async interaction => {
       ephemeral: true
     });
   }
+
+  // Get user data after initial checks
+  const data = await getUserData(user.id);
 
   // -------- /draw --------
   if (commandName === 'draw') {
@@ -1358,11 +1360,17 @@ client.on('interactionCreate', async interaction => {
 
   // -------- /binder --------
   if (commandName === 'binder') {
+    // Defer IMMEDIATELY before any database calls
+    await interaction.deferReply();
+    
+    // Now load user data (this takes time with large inventories)
+    const binderData = await getUserData(user.id);
+    
     const page = 0;
-    const { embed, totalPages } = formatBinderEmbed(data.inventory, page);
+    const { embed, totalPages } = formatBinderEmbed(binderData.inventory, page);
     
     if (totalPages <= 1) {
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
 
     const row = new ActionRowBuilder()
@@ -1379,39 +1387,52 @@ client.on('interactionCreate', async interaction => {
           .setDisabled(totalPages === 1)
       );
 
-    return interaction.reply({ embeds: [embed], components: [row] });
+    return interaction.editReply({ embeds: [embed], components: [row] });
   }
 
-  // -------- /trash --------
-  if (commandName === 'trash') {
-    const index = interaction.options.getInteger('index');
+  // -------- /burn --------
+  if (commandName === 'burn') {
+    const instanceId = interaction.options.getString('card');
 
-    if (index < 0 || index >= data.inventory.length) {
+    // Find the card in user's inventory
+    const cardIndex = data.inventory.findIndex(entry => {
+      const entryInstanceId = entry.instance_id || entry.instanceId;
+      return entryInstanceId === instanceId;
+    });
+
+    if (cardIndex === -1) {
       return interaction.reply({
-        content: '❌ Invalid index. Use `/binder` or text command to see valid indices.',
+        content: `❌ You don't have a card with ID \`${instanceId}\`. Use \`/binder\` to see your cards.`,
         ephemeral: true
       });
     }
 
-    const removed = data.inventory.splice(index, 1)[0];
-    const card = cards.find(c => c.id === removed.cardId);
-    const name = card ? card.name : 'Unknown';
+    const cardEntry = data.inventory[cardIndex];
+    const cardId = cardEntry.card_id || cardEntry.cardId;
+    const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
+    const cardName = card ? card.name : 'Unknown';
 
-    // Delete from database - need to find the DB row by user_id and card_id and obtained_at
+    // Remove from memory
+    data.inventory.splice(cardIndex, 1);
+
+    // Delete from database
     const { error } = await supabase
       .from('inventory')
       .delete()
       .eq('user_id', user.id)
-      .eq('card_id', removed.cardId)
-      .eq('obtained_at', removed.obtainedAt)
+      .eq('instance_id', instanceId)
       .limit(1);
 
     if (error) {
       console.error('Error deleting from inventory:', error);
+      return interaction.reply({
+        content: '❌ Failed to burn card. Please try again.',
+        ephemeral: true
+      });
     }
 
     return interaction.reply(
-      `🗑️ Trashed **${name}** at index #${index}.`
+      `🔥 Burned **${cardName}** (\`${instanceId}\`)! This card has been permanently deleted.`
     );
   }
 
@@ -1453,17 +1474,14 @@ client.on('interactionCreate', async interaction => {
 
   // -------- /clearbinder --------
   if (commandName === 'clearbinder') {
-    const confirmText = interaction.options.getString('confirm').toLowerCase().trim().replace(/^@/, '');
+    const confirmText = interaction.options.getString('confirm').toLowerCase().trim();
+    const expectedConfirm = user.username.toLowerCase();
     
-    // Get display name (server nickname) or fallback to username
-    const displayName = interaction.member?.displayName || user.username;
-    const expectedConfirm = displayName.toLowerCase();
-    
-    // Check if confirmation matches (case-insensitive, with or without @)
+    // Check if confirmation matches username (case-insensitive)
     if (confirmText !== expectedConfirm) {
       return interaction.reply({
-        content: `❌ Confirmation failed. You must type **${displayName}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
-        ephemeral: true
+        content: `❌ Confirmation failed. You must type your username **${user.username}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
+        flags: 64 // Ephemeral flag
       });
     }
 
@@ -1472,14 +1490,14 @@ client.on('interactionCreate', async interaction => {
     if (cardCount === 0) {
       return interaction.reply({
         content: '❌ Your binder is already empty!',
-        ephemeral: true
+        flags: 64 // Ephemeral flag
       });
     }
     
-    // Clear memory
-    data.inventory = [];
-
-    // Clear database inventory
+    // Defer reply immediately to prevent timeout
+    await interaction.deferReply({ flags: 64 });
+    
+    // Clear database inventory first (single query is much faster)
     const { error: invError } = await supabase
       .from('inventory')
       .delete()
@@ -1487,15 +1505,17 @@ client.on('interactionCreate', async interaction => {
 
     if (invError) {
       console.error('Error clearing inventory:', invError);
-      return interaction.reply({
-        content: '❌ Failed to clear your binder. Please try again.',
-        ephemeral: true
+      return interaction.editReply({
+        content: '❌ Failed to clear your binder. Please try again.'
       });
     }
 
-    return interaction.reply({
-      content: `🗑️ Your binder has been cleared! Removed **${cardCount}** cards. Start collecting fresh!`,
-      ephemeral: true
+    // Clear memory cache and force reload from database
+    delete userData[user.id];
+    await getUserData(user.id); // Reload fresh data from database
+
+    return interaction.editReply({
+      content: `🗑️ Your binder has been cleared! Removed **${cardCount}** cards. Start collecting fresh!`
     });
   }
 
@@ -1723,8 +1743,8 @@ client.on('interactionCreate', async interaction => {
         '`/search <name>` - Search for cards by name\n' +
         '`/view <card>` - View a specific card\n' +
         '`/trade <card> <@trainer>` - Trade a card to another trainer\n' +
-        '`/trash <index>` - Remove a card\n' +
-        '`/clearbinder <confirm>` - Clear your entire collection (type your display name)\n' +
+        '`/burn <card>` - Burn a card (permanent deletion)\n' +
+        '`/clearbinder <confirm>` - Clear your entire collection (type your username)\n' +
         '`/reset_me` - Reset your data (testing)\n\n' +
         '**Admin Commands:**\n' +
         '`/setchannel <channel>` - Restrict commands to a channel (Admin)\n' +
