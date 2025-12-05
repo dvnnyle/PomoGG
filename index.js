@@ -15,6 +15,17 @@ const { createClient } = require('@supabase/supabase-js');
 const { createCanvas, loadImage } = require('canvas');
 const axios = require('axios');
 const { AttachmentBuilder } = require('discord.js');
+const http = require('http');
+
+// Simple HTTP server for Render (keeps service alive)
+const PORT = process.env.PORT || 3000;
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('PomoGG Discord Bot is running!');
+});
+server.listen(PORT, () => {
+  console.log(`HTTP server listening on port ${PORT}`);
+});
 
 // ------------------- DISCORD CLIENT -------------------
 const client = new Client({
