@@ -1443,16 +1443,16 @@ client.on('interactionCreate', async interaction => {
 
   // -------- /clearbinder --------
   if (commandName === 'clearbinder') {
-    const confirmText = interaction.options.getString('confirm');
+    const confirmText = interaction.options.getString('confirm').toLowerCase();
     
     // Get display name (server nickname) or fallback to username
     const displayName = interaction.member?.displayName || user.username;
-    const expectedConfirm = `@${displayName}`;
+    const expectedConfirm = `@${displayName.toLowerCase()}`;
     
-    // Check if confirmation matches
+    // Check if confirmation matches (case-insensitive)
     if (confirmText !== expectedConfirm) {
       return interaction.reply({
-        content: `❌ Confirmation failed. You must type **${expectedConfirm}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
+        content: `❌ Confirmation failed. You must type **@${displayName}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
         ephemeral: true
       });
     }
