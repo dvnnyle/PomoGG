@@ -276,6 +276,9 @@ const combinedImageCache = new Map();
 // Server configuration (guild_id -> channel_id)
 const serverConfig = new Map();
 
+// Admin configuration (user_id -> boolean)
+const adminUsers = new Set();
+
 // Load server configurations from database
 async function loadServerConfigs() {
   try {
@@ -297,6 +300,70 @@ async function loadServerConfigs() {
   } catch (error) {
     console.error('Error in loadServerConfigs:', error);
   }
+}
+
+// Load admins from database
+async function loadAdmins() {
+  try {
+    const { data, error } = await supabase
+      .from('admins')
+      .select('*');
+    
+    if (error) {
+      console.error('Error loading admins:', error);
+      return;
+    }
+    
+    if (data) {
+      adminUsers.clear();
+      data.forEach(admin => {
+        adminUsers.add(admin.user_id);
+      });
+      console.log(`Loaded ${data.length} admin users`);
+    }
+  } catch (error) {
+    console.error('Error in loadAdmins:', error);
+  }
+}
+
+// Add admin to database
+async function addAdmin(userId) {
+  try {
+    adminUsers.add(userId);
+    
+    await supabase
+      .from('admins')
+      .upsert({
+        user_id: userId
+      });
+    
+    return true;
+  } catch (error) {
+    console.error('Error adding admin:', error);
+    return false;
+  }
+}
+
+// Remove admin from database
+async function removeAdmin(userId) {
+  try {
+    adminUsers.delete(userId);
+    
+    await supabase
+      .from('admins')
+      .delete()
+      .eq('user_id', userId);
+    
+    return true;
+  } catch (error) {
+    console.error('Error removing admin:', error);
+    return false;
+  }
+}
+
+// Check if user is admin
+function isAdmin(userId) {
+  return adminUsers.has(userId);
 }
 
 // Set channel for a guild
@@ -548,7 +615,29 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('channelinfo')
-    .setDescription('Show which channel is configured for bot commands')
+    .setDescription('Show which channel is configured for bot commands'),
+
+  new SlashCommandBuilder()
+    .setName('setadmin')
+    .setDescription('Add or remove an admin (Admin only)')
+    .addUserOption(option =>
+      option.setName('user')
+        .setDescription('The user to add/remove as admin')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('action')
+        .setDescription('Add or remove admin')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Add', value: 'add' },
+          { name: 'Remove', value: 'remove' }
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('clearbinder')
+    .setDescription('Clear your entire card collection and start fresh')
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -570,6 +659,7 @@ async function registerCommands() {
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await loadServerConfigs();
+  await loadAdmins();
 });
 
 // Handle text commands
@@ -813,6 +903,62 @@ client.on('interactionCreate', async interaction => {
         content: `📋 Bot commands are restricted to: <#${channelId}>\n\n*Admins can use \`/setchannel\` to change it.*`,
         ephemeral: true
       });
+    }
+
+    // Handle /setadmin command
+    if (interaction.commandName === 'setadmin') {
+      // Check if user is admin
+      if (!isAdmin(interaction.user.id)) {
+        return interaction.reply({
+          content: '❌ You must be an admin to use this command.',
+          ephemeral: true
+        });
+      }
+
+      const targetUser = interaction.options.getUser('user');
+      const action = interaction.options.getString('action');
+
+      if (targetUser.bot) {
+        return interaction.reply({
+          content: '❌ Cannot make bots admins.',
+          ephemeral: true
+        });
+      }
+
+      if (action === 'add') {
+        const success = await addAdmin(targetUser.id);
+        if (success) {
+          return interaction.reply({
+            content: `✅ <@${targetUser.id}> is now an admin.`,
+            ephemeral: true
+          });
+        } else {
+          return interaction.reply({
+            content: '❌ Failed to add admin.',
+            ephemeral: true
+          });
+        }
+      } else if (action === 'remove') {
+        if (targetUser.id === interaction.user.id) {
+          return interaction.reply({
+            content: '❌ You cannot remove yourself as admin.',
+            ephemeral: true
+          });
+        }
+
+        const success = await removeAdmin(targetUser.id);
+        if (success) {
+          return interaction.reply({
+            content: `✅ <@${targetUser.id}> is no longer an admin.`,
+            ephemeral: true
+          });
+        } else {
+          return interaction.reply({
+            content: '❌ Failed to remove admin.',
+            ephemeral: true
+          });
+        }
+      }
     }
 
     // Check if command is allowed in this channel (except setchannel and channelinfo)
@@ -1280,6 +1426,33 @@ client.on('interactionCreate', async interaction => {
     }
 
     return interaction.reply('✅ Your data has been reset (testing only).');
+  }
+
+  // -------- /clearbinder --------
+  if (commandName === 'clearbinder') {
+    const cardCount = data.inventory.length;
+    
+    // Clear memory
+    data.inventory = [];
+
+    // Clear database inventory
+    const { error: invError } = await supabase
+      .from('inventory')
+      .delete()
+      .eq('user_id', user.id);
+
+    if (invError) {
+      console.error('Error clearing inventory:', invError);
+      return interaction.reply({
+        content: '❌ Failed to clear your binder. Please try again.',
+        ephemeral: true
+      });
+    }
+
+    return interaction.reply({
+      content: `🗑️ Your binder has been cleared! Removed **${cardCount}** cards. Start collecting fresh!`,
+      ephemeral: true
+    });
   }
 
   // -------- /menu --------
