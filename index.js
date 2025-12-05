@@ -849,7 +849,7 @@ client.on('messageCreate', async message => {
     return message.reply(
       '**Card Game Commands:**\n\n' +
       '**Text Commands:**\n' +
-      '`kd` or `kd draw` - Draw a card (5 min cooldown)\n' +
+      '`kd` or `kd draw` - Draw a card (15 min cooldown)\n' +
       '`kd pack` or `kd p` - Open a pack of 5 cards (10 min cooldown)\n' +
       '`pick` or `pk` - Pick 1 from 3 cards (30 min cooldown)\n' +
       '`kd inventory`, `kd inv`, or `kd i` - View your collection\n' +
@@ -865,7 +865,12 @@ client.on('messageCreate', async message => {
       '`/view <card>` - View a specific card\n' +
       '`/trade <card> <@trainer>` - Trade a card to another trainer\n' +
       '`/trash <index>` - Remove a card\n' +
-      '`/reset_me` - Reset your data (testing)\n' +
+      '`/clearbinder <confirm>` - Clear your entire collection (requires @username)\n' +
+      '`/reset_me` - Reset your data (testing)\n\n' +
+      '**Admin Commands:**\n' +
+      '`/setchannel <channel>` - Restrict commands to a channel (Admin)\n' +
+      '`/channelinfo` - View channel restrictions\n' +
+      '`/setadmin <user> <add/remove>` - Manage bot admins (Admin)\n' +
       '`/help` - Show this help'
     );
   }
@@ -1690,7 +1695,7 @@ client.on('interactionCreate', async interaction => {
       content: 
         '**Card Game Commands:**\n\n' +
         '**Text Commands:**\n' +
-        '`kd` or `kd draw` - Draw a card (5 min cooldown)\n' +
+        '`kd` or `kd draw` - Draw a card (15 min cooldown)\n' +
         '`kd pack` or `kd p` - Open a pack of 5 cards (10 min cooldown)\n' +
         '`pick` or `pk` - Pick 1 from 3 cards (30 min cooldown)\n' +
         '`kd inventory`, `kd inv`, or `kd i` - View your collection\n' +
@@ -1706,7 +1711,12 @@ client.on('interactionCreate', async interaction => {
         '`/view <card>` - View a specific card\n' +
         '`/trade <card> <@trainer>` - Trade a card to another trainer\n' +
         '`/trash <index>` - Remove a card\n' +
-        '`/reset_me` - Reset your data (testing)\n' +
+        '`/clearbinder <confirm>` - Clear your entire collection (requires @username)\n' +
+        '`/reset_me` - Reset your data (testing)\n\n' +
+        '**Admin Commands:**\n' +
+        '`/setchannel <channel>` - Restrict commands to a channel (Admin)\n' +
+        '`/channelinfo` - View channel restrictions\n' +
+        '`/setadmin <user> <add/remove>` - Manage bot admins (Admin)\n' +
         '`/help` - Show this help',
       ephemeral: true
     });
