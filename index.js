@@ -1444,12 +1444,21 @@ client.on('interactionCreate', async interaction => {
   // -------- /clearbinder --------
   if (commandName === 'clearbinder') {
     const confirmText = interaction.options.getString('confirm');
-    const expectedConfirm = `@${user.username}`;
     
-    // Check if confirmation matches username
-    if (confirmText !== expectedConfirm) {
+    // Get both username and display name (server nickname)
+    const username = `@${user.username}`;
+    const displayName = interaction.member?.displayName ? `@${interaction.member.displayName}` : null;
+    
+    // Check if confirmation matches either username or display name
+    const isValidConfirm = confirmText === username || (displayName && confirmText === displayName);
+    
+    if (!isValidConfirm) {
+      const validOptions = displayName && displayName !== username 
+        ? `**${username}** or **${displayName}**`
+        : `**${username}**`;
+      
       return interaction.reply({
-        content: `❌ Confirmation failed. You must type **${expectedConfirm}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
+        content: `❌ Confirmation failed. You must type ${validOptions} exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
         ephemeral: true
       });
     }
