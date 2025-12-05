@@ -640,7 +640,7 @@ const commands = [
     .setDescription('Clear your entire card collection and start fresh')
     .addStringOption(option =>
       option.setName('confirm')
-        .setDescription('Type your display name (e.g., @danny) to confirm')
+        .setDescription('Type your display name (e.g., danny) to confirm')
         .setRequired(true)
     )
 ].map(cmd => cmd.toJSON());
@@ -865,7 +865,7 @@ client.on('messageCreate', async message => {
       '`/view <card>` - View a specific card\n' +
       '`/trade <card> <@trainer>` - Trade a card to another trainer\n' +
       '`/trash <index>` - Remove a card\n' +
-      '`/clearbinder <confirm>` - Clear your entire collection (requires @username)\n' +
+      '`/clearbinder <confirm>` - Clear your entire collection (type your display name)\n' +
       '`/reset_me` - Reset your data (testing)\n\n' +
       '**Admin Commands:**\n' +
       '`/setchannel <channel>` - Restrict commands to a channel (Admin)\n' +
@@ -1443,16 +1443,16 @@ client.on('interactionCreate', async interaction => {
 
   // -------- /clearbinder --------
   if (commandName === 'clearbinder') {
-    const confirmText = interaction.options.getString('confirm').toLowerCase();
+    const confirmText = interaction.options.getString('confirm').toLowerCase().trim().replace(/^@/, '');
     
     // Get display name (server nickname) or fallback to username
     const displayName = interaction.member?.displayName || user.username;
-    const expectedConfirm = `@${displayName.toLowerCase()}`;
+    const expectedConfirm = displayName.toLowerCase();
     
-    // Check if confirmation matches (case-insensitive)
+    // Check if confirmation matches (case-insensitive, with or without @)
     if (confirmText !== expectedConfirm) {
       return interaction.reply({
-        content: `❌ Confirmation failed. You must type **@${displayName}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
+        content: `❌ Confirmation failed. You must type **${displayName}** exactly to clear your binder.\n\n*This action will delete all your cards permanently!*`,
         ephemeral: true
       });
     }
@@ -1714,7 +1714,7 @@ client.on('interactionCreate', async interaction => {
         '`/view <card>` - View a specific card\n' +
         '`/trade <card> <@trainer>` - Trade a card to another trainer\n' +
         '`/trash <index>` - Remove a card\n' +
-        '`/clearbinder <confirm>` - Clear your entire collection (requires @username)\n' +
+        '`/clearbinder <confirm>` - Clear your entire collection (type your display name)\n' +
         '`/reset_me` - Reset your data (testing)\n\n' +
         '**Admin Commands:**\n' +
         '`/setchannel <channel>` - Restrict commands to a channel (Admin)\n' +
