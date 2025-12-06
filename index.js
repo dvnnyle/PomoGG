@@ -53,9 +53,11 @@ const cardSets = [
   { bucket: 'baseSet2', displayName: 'Base Set 2' },
   { bucket: 'crowZenith', displayName: 'Crown Zenith' },
   { bucket: 'vividVoltage', displayName: 'Vivid Voltage' },
-  // { bucket: 'whiteFlare', displayName: 'White Flare' }, // Temporarily disabled
-  // { bucket: 'BlackBolt', displayName: 'Black Bolt' }, // Temporarily disabled
-  { bucket: 'evolvingSkies', displayName: 'Evolving Skies' }
+  { bucket: 'evolvingSkies', displayName: 'Evolving Skies' },
+  { bucket: 'fusionStrike', displayName: 'Fusion Strike' },
+  { bucket: 'swordShieldPromos', displayName: 'Sword & Shield Promos' },
+  { bucket: 'evolutions', displayName: 'Evolution' },
+  { bucket: 'ultraPrism', displayName: 'Ultra Prism' }
 ];
 
 // Load all files from all buckets and convert them to card objects
@@ -458,6 +460,49 @@ async function combineCardImages(card1Url, card2Url, card3Url) {
   }
 }
 
+// Function to combine 5 card images horizontally
+async function combinePackImages(urls) {
+  try {
+    // Create cache key from all URLs
+    const cacheKey = urls.join('|');
+    
+    // Check if this combination is already cached
+    if (combinedImageCache.has(cacheKey)) {
+      return combinedImageCache.get(cacheKey);
+    }
+
+    // Fetch all 5 images (with caching)
+    const images = await Promise.all(urls.map(url => fetchAndCacheImage(url)));
+
+    // Balanced size for better Discord preview
+    const targetWidth = 400;
+    const targetHeight = 560;
+    const spacing = 30; // Space between cards
+    
+    const canvas = createCanvas(targetWidth * 5 + spacing * 4, targetHeight);
+    const ctx = canvas.getContext('2d');
+
+    // Transparent background (no white)
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw all 5 images side by side with spacing
+    images.forEach((img, i) => {
+      const x = i * (targetWidth + spacing);
+      ctx.drawImage(img, x, 0, targetWidth, targetHeight);
+    });
+
+    const buffer = canvas.toBuffer('image/png');
+    
+    // Cache the combined result
+    combinedImageCache.set(cacheKey, buffer);
+    
+    return buffer;
+  } catch (error) {
+    console.error('Error combining pack images:', error);
+    return null;
+  }
+}
+
 function formatInventory(inv) {
   if (!inv.length) return 'You have no cards yet 😢';
 
@@ -466,9 +511,9 @@ function formatInventory(inv) {
       const cardId = entry.card_id || entry.cardId; // Support both formats
       const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
       const name = card ? formatCardName(card.name) : 'Unknown';
-      const rarity = card ? card.rarity : '???';
+      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
       const ownerId = entry.instance_id || 'N/A';
-      return `#${i} - **${name}** (${rarity}) \`${ownerId}\``;
+      return `#${i} - **${name}** (${quality}) \`${ownerId}\``;
     })
     .join('\n');
 }
@@ -514,7 +559,8 @@ function formatBinderEmbed(inv, page = 0) {
       description += `\n**${item.setName}** (${item.count})\n`;
     } else if (item.type === 'card') {
       const ownerId = item.entry?.instance_id || 'N/A';
-      description += `#${item.index} ${formatCardName(item.card.name)} (${item.card.rarity}) \`${ownerId}\`\n`;
+      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
+      description += `#${item.index + 1} **${formatCardName(item.card.name)}** (${quality}) \`${ownerId}\`\n`;
     }
   }
 
@@ -748,43 +794,31 @@ client.on('messageCreate', async message => {
     data.lastPack = now;
     await saveUserCooldowns(user.id, data);
 
-    // Create pack embed with pagination
-    const page = 0;
-    const embed = new EmbedBuilder()
-      .setColor('#FFD700')
-      .setTitle('🃏 Pack Opened!')
-      .setTimestamp();
-
     if (pulled.length === 0) {
-      embed.setDescription('No cards in pack :(');
-      return loadingMsg.edit({ embeds: [embed] });
+      return loadingMsg.edit('❌ No cards available for pack.');
     }
 
-    const card = pulled[page];
-    embed
-      .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
-      .setImage(card.imageUrl)
-      .setFooter({ text: `Card ${page + 1}/${pulled.length}` });
+    // Combine the 5 images horizontally
+    const imageUrls = pulled.map(c => c.imageUrl);
+    const combinedImageBuffer = await combinePackImages(imageUrls);
 
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId(`pack_prev_0`)
-          .setLabel('⬅️ Previous')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
-        new ButtonBuilder()
-          .setCustomId(`pack_next_0`)
-          .setLabel('Next ➡️')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(pulled.length === 1)
-      );
+    if (!combinedImageBuffer) {
+      return loadingMsg.edit('❌ Failed to load card images.');
+    }
 
-    // Store pack data temporarily
-    if (!userData[user.id]) userData[user.id] = {};
-    userData[user.id].packCards = pulled;
+    const attachment = new AttachmentBuilder(combinedImageBuffer, { name: 'pack.png' });
 
-    return loadingMsg.edit({ embeds: [embed], components: [row] });
+    // Create text details for all cards
+    let details = '🃏 **Pack Cards:**\n';
+    pulled.forEach((card, i) => {
+      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
+      details += `• **${formatCardName(card.name)}** - ${quality} | ${card.set}\n`;
+    });
+
+    return loadingMsg.edit({
+      content: details,
+      files: [attachment]
+    });
   }
 
   // cd inventory
@@ -1075,72 +1109,12 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    if (customId === 'btn_pack') {
-      const elapsed = now - data.lastPack;
-      if (elapsed < PACK_COOLDOWN) {
-        const remaining = PACK_COOLDOWN - elapsed;
-        return interaction.reply({
-          content: `⏳ You can open another pack in **${msToNice(remaining)}**.`,
-          ephemeral: true
-        });
-      }
-
-      await interaction.deferReply();
-
-      const packSize = 5;
-      const pulled = [];
-      for (let i = 0; i < packSize; i++) {
-        const card = randomCard();
-        if (!card) break;
-        const instanceId = generateCardInstanceId();
-        pulled.push({ ...card, instance_id: instanceId });
-        data.inventory.push({ card_id: card.id, obtained_at: now, instance_id: instanceId });
-        await addCardToInventory(user.id, card.id, now, instanceId);
-      }
-      data.lastPack = now;
-      await saveUserCooldowns(user.id, data);
-
-      if (!pulled.length) {
-        return interaction.editReply('❌ No cards available for pack.');
-      }
-
-      // Create pack embed with pagination
-      const page = 0;
-      const card = pulled[page];
-      const embed = new EmbedBuilder()
-        .setColor('#FFD700')
-        .setTitle('🃏 Pack Opened!')
-        .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
-        .setImage(card.imageUrl)
-        .setFooter({ text: `Card ${page + 1}/${pulled.length}` });
-
-      const row = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId(`pack_prev_0`)
-            .setLabel('⬅️ Previous')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-          new ButtonBuilder()
-            .setCustomId(`pack_next_0`)
-            .setLabel('Next ➡️')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(pulled.length === 1)
-        );
-
-      // Store pack data temporarily
-      if (!userData[user.id]) userData[user.id] = {};
-      userData[user.id].packCards = pulled;
-
-      return interaction.editReply({ embeds: [embed], components: [row] });
-    }
-
     if (customId === 'btn_inventory') {
       const text = formatInventory(data.inventory);
       return interaction.reply({ content: text, ephemeral: true });
     }
 
-    // Handle pack pagination
+    // Handle pack pagination (for backward/forward navigation)
     if (customId.startsWith('pack_prev_') || customId.startsWith('pack_next_')) {
       const currentPage = parseInt(customId.split('_')[2]);
       const isNext = customId.startsWith('pack_next_');
@@ -1152,10 +1126,11 @@ client.on('interactionCreate', async interaction => {
       }
 
       const card = packCards[newPage];
+      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
       const embed = new EmbedBuilder()
         .setColor('#FFD700')
         .setTitle('🃏 Pack Card')
-        .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
+        .setDescription(`**${formatCardName(card.name)}**\nQuality: ${quality}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
         .setImage(card.imageUrl)
         .setFooter({ text: `Card ${newPage + 1}/${packCards.length}` });
 
@@ -1437,6 +1412,8 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
+    await interaction.deferReply();
+
     const packSize = 5;
     const pulled = [];
 
@@ -1453,38 +1430,30 @@ client.on('interactionCreate', async interaction => {
     await saveUserCooldowns(user.id, data);
 
     if (!pulled.length) {
-      return interaction.reply('❌ No cards available for pack.');
+      return interaction.editReply('❌ No cards available for pack.');
     }
 
-    // Create pack embed with pagination
-    const page = 0;
-    const card = pulled[page];
-    const embed = new EmbedBuilder()
-      .setColor('#FFD700')
-      .setTitle('🃏 Pack Opened!')
-      .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
-      .setImage(card.imageUrl)
-      .setFooter({ text: `Card ${page + 1}/${pulled.length}` });
+    // Combine the 5 images horizontally
+    const imageUrls = pulled.map(c => c.imageUrl);
+    const combinedImageBuffer = await combinePackImages(imageUrls);
 
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId(`pack_prev_0`)
-          .setLabel('⬅️ Previous')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
-        new ButtonBuilder()
-          .setCustomId(`pack_next_0`)
-          .setLabel('Next ➡️')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(pulled.length === 1)
-      );
+    if (!combinedImageBuffer) {
+      return interaction.editReply('❌ Failed to load card images.');
+    }
 
-    // Store pack data temporarily
-    if (!userData[user.id]) userData[user.id] = {};
-    userData[user.id].packCards = pulled;
+    const attachment = new AttachmentBuilder(combinedImageBuffer, { name: 'pack.png' });
 
-    return interaction.reply({ embeds: [embed], components: [row] });
+    // Create text details for all cards
+    let details = '🃏 **Pack Cards:**\n';
+    pulled.forEach((card, i) => {
+      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
+      details += `• **${formatCardName(card.name)}** - ${quality} | ${card.set}\n`;
+    });
+
+    return interaction.editReply({
+      content: details,
+      files: [attachment]
+    });
   }
 
   // -------- /binder --------
