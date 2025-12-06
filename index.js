@@ -1085,6 +1085,8 @@ client.on('interactionCreate', async interaction => {
         });
       }
 
+      await interaction.deferReply();
+
       const packSize = 5;
       const pulled = [];
       for (let i = 0; i < packSize; i++) {
@@ -1099,7 +1101,7 @@ client.on('interactionCreate', async interaction => {
       await saveUserCooldowns(user.id, data);
 
       if (!pulled.length) {
-        return interaction.reply('❌ No cards available for pack.');
+        return interaction.editReply('❌ No cards available for pack.');
       }
 
       // Create pack embed with pagination
@@ -1130,7 +1132,7 @@ client.on('interactionCreate', async interaction => {
       if (!userData[user.id]) userData[user.id] = {};
       userData[user.id].packCards = pulled;
 
-      return interaction.reply({ embeds: [embed], components: [row] });
+      return interaction.editReply({ embeds: [embed], components: [row] });
     }
 
     if (customId === 'btn_inventory') {
