@@ -465,7 +465,7 @@ function formatInventory(inv) {
     .map((entry, i) => {
       const cardId = entry.card_id || entry.cardId; // Support both formats
       const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
-      const name = card ? card.name : 'Unknown';
+      const name = card ? formatCardName(card.name) : 'Unknown';
       const rarity = card ? card.rarity : '???';
       const ownerId = entry.instance_id || 'N/A';
       return `#${i} - **${name}** (${rarity}) \`${ownerId}\``;
@@ -514,7 +514,7 @@ function formatBinderEmbed(inv, page = 0) {
       description += `\n**${item.setName}** (${item.count})\n`;
     } else if (item.type === 'card') {
       const ownerId = item.entry?.instance_id || 'N/A';
-      description += `#${item.index} ${item.card.name} (${item.card.rarity}) \`${ownerId}\`\n`;
+      description += `#${item.index} ${formatCardName(item.card.name)} (${item.card.rarity}) \`${ownerId}\`\n`;
     }
   }
 
@@ -530,6 +530,14 @@ function msToNice(ms) {
   const seconds = totalSeconds % 60;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+// Format card names: remove underscores and uppercase
+function formatCardName(name) {
+  if (!name) return 'Unknown';
+  return name
+    .replace(/_/g, ' ') // Replace underscores with spaces
+    .toUpperCase(); // Convert to uppercase
 }
 
 // ------------------- SLASH COMMANDS -------------------
@@ -707,9 +715,7 @@ client.on('messageCreate', async message => {
     await addCardToInventory(user.id, card.id, now, instanceId);
     await saveUserCooldowns(user.id, data);
 
-    // Extract card name from the full name (e.g., "Onix Base Set 2 B2 84" -> "Onix")
-    const cardNameParts = card.name.split(' ');
-    const cardName = cardNameParts[0]; // First word is the Pokemon name
+    const cardName = formatCardName(card.name);
     const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`; // Random PSA 1-10
 
     return loadingMsg.edit({
@@ -1025,8 +1031,7 @@ client.on('interactionCreate', async interaction => {
 
       await interaction.deferReply();
 
-      const cardNameParts = card.name.split(' ');
-      const cardName = cardNameParts[0];
+      const cardName = formatCardName(card.name);
       const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
 
       return interaction.editReply({
@@ -1110,7 +1115,7 @@ client.on('interactionCreate', async interaction => {
       const cardEntry = senderData.inventory[cardIndex];
       const cardId = cardEntry.card_id || cardEntry.cardId;
       const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
-      const cardName = card ? card.name : 'Unknown';
+      const cardName = card ? formatCardName(card.name) : 'Unknown';
 
       // Remove from sender
       senderData.inventory.splice(cardIndex, 1);
@@ -1203,7 +1208,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         const ownerText = owners.length > 0 ? owners.join(', ') : 'Unclaimed';
-        description += `**${card.name}** - ${card.set}\n└ Owners: ${ownerText}\n\n`;
+        description += `**${formatCardName(card.name)}** - ${card.set}\n└ Owners: ${ownerText}\n\n`;
       }
 
       const embed = new EmbedBuilder()
@@ -1254,8 +1259,7 @@ client.on('interactionCreate', async interaction => {
       await addCardToInventory(user.id, card.id, now, instanceId);
       data.pickChoices = [];
 
-      const cardNameParts = card.name.split(' ');
-      const cardName = cardNameParts[0];
+      const cardName = formatCardName(card.name);
       const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
       const choiceEmoji = ['1️⃣', '2️⃣', '3️⃣'][index];
       
@@ -1300,7 +1304,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     const instanceId = generateCardInstanceId();
-    data.inventory.push({ cardId: card.id, obtainedAt: now, instance_id: instanceId });
+    data.inventory.push({ card_id: card.id, obtained_at: now, instance_id: instanceId });
     data.lastDraw = now;
     await addCardToInventory(user.id, card.id, now, instanceId);
     await saveUserCooldowns(user.id, data);
@@ -1308,8 +1312,7 @@ client.on('interactionCreate', async interaction => {
     // Defer reply to show "thinking" state
     await interaction.deferReply();
 
-    const cardNameParts = card.name.split(' ');
-    const cardName = cardNameParts[0];
+    const cardName = formatCardName(card.name);
     const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
 
     return interaction.editReply({
@@ -1410,7 +1413,7 @@ client.on('interactionCreate', async interaction => {
     const cardEntry = data.inventory[cardIndex];
     const cardId = cardEntry.card_id || cardEntry.cardId;
     const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
-    const cardName = card ? card.name : 'Unknown';
+    const cardName = card ? formatCardName(card.name) : 'Unknown';
 
     // Remove from memory
     data.inventory.splice(cardIndex, 1);
@@ -1648,8 +1651,7 @@ client.on('interactionCreate', async interaction => {
 
     await interaction.deferReply();
 
-    const cardNameParts = card.name.split(' ');
-    const cardName = cardNameParts[0];
+    const cardName = formatCardName(card.name);
     const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
     const obtainedDate = new Date(cardEntry.obtained_at || cardEntry.obtainedAt).toLocaleDateString();
 
@@ -1701,7 +1703,7 @@ client.on('interactionCreate', async interaction => {
     const cardEntry = data.inventory[cardIndex];
     const cardId = cardEntry.card_id || cardEntry.cardId;
     const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
-    const cardName = card ? card.name : 'Unknown';
+    const cardName = card ? formatCardName(card.name) : 'Unknown';
 
     // Create confirmation buttons
     const row = new ActionRowBuilder()
@@ -1799,8 +1801,7 @@ client.on('interactionCreate', async interaction => {
 
     // Create card info text
     const cardInfo = choices.map((card, i) => {
-      const cardNameParts = card.name.split(' ');
-      const cardName = cardNameParts[0];
+      const cardName = formatCardName(card.name);
       return `**${['1️⃣', '2️⃣', '3️⃣'][i]} ${cardName}** - Set: ${card.set}`;
     }).join('\n');
 
