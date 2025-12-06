@@ -31,7 +31,7 @@ const PRELOAD_IMAGES = process.env.PRELOAD_IMAGES === 'true'; // Enable/disable 
 
 // cooldowns (ms)
 const DRAW_COOLDOWN = TEST_MODE ? 0 : 15 * 60 * 1000;   // 0s vs 15min
-const PACK_COOLDOWN = TEST_MODE ? 0 : 10 * 60 * 1000;   // 0s vs 10min
+const PACK_COOLDOWN = TEST_MODE ? 0 : 24 * 60 * 60 * 1000;   // 0s vs 24hr
 const PICK_COOLDOWN = TEST_MODE ? 0 : 30 * 60 * 1000;  // 0s vs 30min
 
 console.log('TEST_MODE:', TEST_MODE);
@@ -741,15 +741,50 @@ client.on('messageCreate', async message => {
       const card = randomCard();
       if (!card) break;
       const instanceId = generateCardInstanceId();
-      pulled.push(card);
+      pulled.push({ ...card, instance_id: instanceId });
       data.inventory.push({ card_id: card.id, obtained_at: now, instance_id: instanceId });
       await addCardToInventory(user.id, card.id, now, instanceId);
     }
     data.lastPack = now;
     await saveUserCooldowns(user.id, data);
 
-    const summary = pulled.map(c => `- **${c.name}** (${c.rarity})`).join('\n');
-    return loadingMsg.edit(`🃏 You opened a pack and got:\n${summary}`);
+    // Create pack embed with pagination
+    const page = 0;
+    const embed = new EmbedBuilder()
+      .setColor('#FFD700')
+      .setTitle('🃏 Pack Opened!')
+      .setTimestamp();
+
+    if (pulled.length === 0) {
+      embed.setDescription('No cards in pack :(');
+      return loadingMsg.edit({ embeds: [embed] });
+    }
+
+    const card = pulled[page];
+    embed
+      .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
+      .setImage(card.imageUrl)
+      .setFooter({ text: `Card ${page + 1}/${pulled.length}` });
+
+    const row = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`pack_prev_0`)
+          .setLabel('⬅️ Previous')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId(`pack_next_0`)
+          .setLabel('Next ➡️')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(pulled.length === 1)
+      );
+
+    // Store pack data temporarily
+    if (!userData[user.id]) userData[user.id] = {};
+    userData[user.id].packCards = pulled;
+
+    return loadingMsg.edit({ embeds: [embed], components: [row] });
   }
 
   // cd inventory
@@ -1056,20 +1091,87 @@ client.on('interactionCreate', async interaction => {
         const card = randomCard();
         if (!card) break;
         const instanceId = generateCardInstanceId();
-        pulled.push(card);
-        data.inventory.push({ cardId: card.id, obtainedAt: now, instance_id: instanceId });
+        pulled.push({ ...card, instance_id: instanceId });
+        data.inventory.push({ card_id: card.id, obtained_at: now, instance_id: instanceId });
         await addCardToInventory(user.id, card.id, now, instanceId);
       }
       data.lastPack = now;
       await saveUserCooldowns(user.id, data);
 
-      const summary = pulled.map(c => `- **${c.name}** (${c.rarity})`).join('\n');
-      return interaction.reply(`🃏 You opened a pack and got:\n${summary}`);
+      if (!pulled.length) {
+        return interaction.reply('❌ No cards available for pack.');
+      }
+
+      // Create pack embed with pagination
+      const page = 0;
+      const card = pulled[page];
+      const embed = new EmbedBuilder()
+        .setColor('#FFD700')
+        .setTitle('🃏 Pack Opened!')
+        .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
+        .setImage(card.imageUrl)
+        .setFooter({ text: `Card ${page + 1}/${pulled.length}` });
+
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`pack_prev_0`)
+            .setLabel('⬅️ Previous')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId(`pack_next_0`)
+            .setLabel('Next ➡️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(pulled.length === 1)
+        );
+
+      // Store pack data temporarily
+      if (!userData[user.id]) userData[user.id] = {};
+      userData[user.id].packCards = pulled;
+
+      return interaction.reply({ embeds: [embed], components: [row] });
     }
 
     if (customId === 'btn_inventory') {
       const text = formatInventory(data.inventory);
       return interaction.reply({ content: text, ephemeral: true });
+    }
+
+    // Handle pack pagination
+    if (customId.startsWith('pack_prev_') || customId.startsWith('pack_next_')) {
+      const currentPage = parseInt(customId.split('_')[2]);
+      const isNext = customId.startsWith('pack_next_');
+      const newPage = isNext ? currentPage + 1 : currentPage - 1;
+      
+      const packCards = data.packCards;
+      if (!packCards || packCards.length === 0) {
+        return interaction.reply({ content: '❌ No pack data found.', ephemeral: true });
+      }
+
+      const card = packCards[newPage];
+      const embed = new EmbedBuilder()
+        .setColor('#FFD700')
+        .setTitle('🃏 Pack Card')
+        .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
+        .setImage(card.imageUrl)
+        .setFooter({ text: `Card ${newPage + 1}/${packCards.length}` });
+
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`pack_prev_${newPage}`)
+            .setLabel('⬅️ Previous')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(newPage === 0),
+          new ButtonBuilder()
+            .setCustomId(`pack_next_${newPage}`)
+            .setLabel('Next ➡️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(newPage >= packCards.length - 1)
+        );
+
+      return interaction.update({ embeds: [embed], components: [row] });
     }
 
     // Handle trade accept/decline
@@ -1340,8 +1442,8 @@ client.on('interactionCreate', async interaction => {
       const card = randomCard();
       if (!card) break;
       const instanceId = generateCardInstanceId();
-      pulled.push(card);
-      data.inventory.push({ cardId: card.id, obtainedAt: now, instance_id: instanceId });
+      pulled.push({ ...card, instance_id: instanceId });
+      data.inventory.push({ card_id: card.id, obtained_at: now, instance_id: instanceId });
       await addCardToInventory(user.id, card.id, now, instanceId);
     }
 
@@ -1352,13 +1454,35 @@ client.on('interactionCreate', async interaction => {
       return interaction.reply('❌ No cards available for pack.');
     }
 
-    const summary = pulled
-      .map(c => `- **${c.name}** (${c.rarity})`)
-      .join('\n');
+    // Create pack embed with pagination
+    const page = 0;
+    const card = pulled[page];
+    const embed = new EmbedBuilder()
+      .setColor('#FFD700')
+      .setTitle('🃏 Pack Opened!')
+      .setDescription(`**${formatCardName(card.name)}**\nRarity: ${card.rarity}\nSet: ${card.set}\n\nCard \`${card.instance_id}\``)
+      .setImage(card.imageUrl)
+      .setFooter({ text: `Card ${page + 1}/${pulled.length}` });
 
-    return interaction.reply(
-      `🃏 You opened a pack and got:\n${summary}`
-    );
+    const row = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`pack_prev_0`)
+          .setLabel('⬅️ Previous')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId(`pack_next_0`)
+          .setLabel('Next ➡️')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(pulled.length === 1)
+      );
+
+    // Store pack data temporarily
+    if (!userData[user.id]) userData[user.id] = {};
+    userData[user.id].packCards = pulled;
+
+    return interaction.reply({ embeds: [embed], components: [row] });
   }
 
   // -------- /binder --------
