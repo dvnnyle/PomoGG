@@ -16,8 +16,7 @@ const {
 // ------------------- MODULE IMPORTS -------------------
 const { TEST_MODE, DRAW_COOLDOWN, PACK_COOLDOWN, PICK_COOLDOWN } = require('./config');
 const { 
-  supabase,
-  userData,
+  supabase, 
   getUserData, 
   saveUserCooldowns, 
   addCardToInventory,
@@ -35,7 +34,6 @@ const {
   loadCardsFromSupabase, 
   randomCard,
   formatCardName,
-  generateCardInstanceId,
   getPickFromPool,
   getPackFromPool
 } = require('./cards');
@@ -53,6 +51,633 @@ const client = new Client({
     GatewayIntentBits.MessageContent
   ]
 });
+
+// Load all files from all buckets and convert them to card objects
+async function loadCardsFromSupabase() {
+  console.log('Loading cards from Supabase...');
+  cards = [];
+
+  for (const set of cardSets) {
+    const { data, error } = await supabase
+      .storage
+      .from(set.bucket)
+      .list('', { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
+
+    if (error) {
+      console.error(`Error loading cards from ${set.bucket}:`, error);
+      console.error('Full error details:', JSON.stringify(error, null, 2));
+      continue;
+    }
+
+    // Filter for image files only
+    const imageFiles = (data || []).filter(file =>
+      file.name.endsWith('.png') ||
+      file.name.endsWith('.jpg') ||
+      file.name.endsWith('.jpeg') ||
+      file.name.endsWith('.gif')
+    );
+
+    const setCards = imageFiles.map(file => {
+      const id = file.name.split('.')[0];
+      
+      // Parse the card name intelligently
+      // Filter out: language codes (en_US, fr, etc), set codes (SWSH4, b2, etc), numbers
+      const parts = id.split('-');
+      const filteredParts = parts.filter(part => {
+        // Skip if it's a number
+        if (/^\d+$/.test(part)) return false;
+        // Skip language codes (en_US, en, fr, ja, etc)
+        if (/^[a-z]{2}(_[A-Z]{2})?$/i.test(part)) return false;
+        // Skip set codes (SWSH4, B2, XY1, etc - letters followed by numbers)
+        if (/^[a-z]+\d+$/i.test(part)) return false;
+        // Skip single letters
+        if (part.length === 1) return false;
+        return true;
+      });
+      
+      const name = filteredParts
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+
+      return {
+        id,
+        name: name || 'Unknown Card',
+        rarity: 'common',
+        set: set.displayName,
+        imageUrl: `${process.env.SUPABASE_URL}/storage/v1/object/public/${set.bucket}/${file.name}`
+      };
+    });
+
+    cards.push(...setCards);
+    console.log(`✅ Loaded ${setCards.length} cards from ${set.displayName}`);
+  }
+
+  // Build lookup map for fast inventory access
+  cardMap.clear();
+  cards.forEach(card => cardMap.set(card.id, card));
+
+  console.log(`✅ Total: ${cards.length} cards loaded from all sets`);
+  
+  // Preload all images into cache for instant access (if enabled)
+  if (PRELOAD_IMAGES) {
+    console.log('⏳ Preloading all card images into cache...');
+    const preloadStart = Date.now();
+    
+    // Load images in batches to avoid overwhelming the system
+    const batchSize = 10;
+    for (let i = 0; i < cards.length; i += batchSize) {
+      const batch = cards.slice(i, i + batchSize);
+      await Promise.all(batch.map(card => fetchAndCacheImage(card.imageUrl)));
+      console.log(`   Cached ${Math.min(i + batchSize, cards.length)}/${cards.length} images...`);
+    }
+    
+    const preloadTime = ((Date.now() - preloadStart) / 1000).toFixed(2);
+    console.log(`✅ All images preloaded in ${preloadTime}s - pick commands will be instant!`);
+  } else {
+    console.log('ℹ️  Image preloading disabled - images will load on demand');
+  }
+
+  // Pre-generate pick and pack pools
+  await generatePickPool();
+  await generatePackPool();
+}
+
+// Pre-generate pick combinations
+async function generatePickPool() {
+  console.log(`⏳ Pre-generating ${PICK_POOL_SIZE} pick combinations...`);
+  const startTime = Date.now();
+  
+  for (let i = 0; i < PICK_POOL_SIZE; i++) {
+    const choices = [];
+    for (let j = 0; j < 3; j++) {
+      const card = randomCard();
+      if (card) choices.push(card);
+    }
+    
+    if (choices.length === 3) {
+      const combinedImageBuffer = await combineCardImages(
+        choices[0].imageUrl,
+        choices[1].imageUrl,
+        choices[2].imageUrl
+      );
+      
+      if (combinedImageBuffer) {
+        pickPool.push({ choices, imageBuffer: combinedImageBuffer });
+        console.log(`   Generated pick ${i + 1}/${PICK_POOL_SIZE}...`);
+      }
+    }
+  }
+  
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+  console.log(`✅ Pick pool ready with ${pickPool.length} combinations (${elapsed}s)`);
+}
+
+// Pre-generate pack combinations
+async function generatePackPool() {
+  console.log(`⏳ Pre-generating ${PACK_POOL_SIZE} pack combinations...`);
+  const startTime = Date.now();
+  
+  for (let i = 0; i < PACK_POOL_SIZE; i++) {
+    const cards = [];
+    for (let j = 0; j < 5; j++) {
+      const card = randomCard();
+      if (card) {
+        const instanceId = generateCardInstanceId();
+        cards.push({ ...card, instance_id: instanceId });
+      }
+    }
+    
+    if (cards.length === 5) {
+      const imageUrls = cards.map(c => c.imageUrl);
+      const combinedImageBuffer = await combinePackImages(imageUrls);
+      
+      if (combinedImageBuffer) {
+        packPool.push({ cards, imageBuffer: combinedImageBuffer });
+        console.log(`   Generated pack ${i + 1}/${PACK_POOL_SIZE}...`);
+      }
+    }
+  }
+  
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+  console.log(`✅ Pack pool ready with ${packPool.length} combinations (${elapsed}s)`);
+}
+
+// Get a pick from the pool and refill if needed
+function getPickFromPool() {
+  if (pickPool.length === 0) return null;
+  
+  const pick = pickPool.shift();
+  
+  // Refill in background if pool is low
+  if (pickPool.length <= REFILL_THRESHOLD) {
+    console.log('🔄 Pick pool low, refilling in background...');
+    generatePickPool().catch(err => console.error('Error refilling pick pool:', err));
+  }
+  
+  return pick;
+}
+
+// Get a pack from the pool and refill if needed
+function getPackFromPool() {
+  if (packPool.length === 0) return null;
+  
+  const pack = packPool.shift();
+  
+  // Refill in background if pool is low
+  if (packPool.length <= REFILL_THRESHOLD) {
+    console.log('🔄 Pack pool low, refilling in background...');
+    generatePackPool().catch(err => console.error('Error refilling pack pool:', err));
+  }
+  
+  return pack;
+}
+
+// ------------------- DATABASE FUNCTIONS -------------------
+// In-memory cache for active sessions
+const userData = {};
+
+// Load user data from Supabase
+async function getUserData(userId) {
+  // Check memory cache first
+  if (userData[userId]) {
+    return userData[userId];
+  }
+
+  try {
+    // Load user from database
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    if (userError && userError.code !== 'PGRST116') { // PGRST116 = not found
+      console.error('Error loading user:', userError);
+    }
+
+    // Load inventory from database
+    const { data: inventory, error: invError } = await supabase
+      .from('inventory')
+      .select('*')
+      .eq('user_id', userId)
+      .order('obtained_at', { ascending: true });
+
+    if (invError) {
+      console.error('Error loading inventory:', invError);
+    }
+
+    // Create user data object
+    userData[userId] = {
+      inventory: inventory || [],
+      lastDraw: user?.last_draw || 0,
+      lastPack: user?.last_pack || 0,
+      lastPick: user?.last_pick || 0,
+      pickChoices: []
+    };
+
+    // If user doesn't exist in DB, create them
+    if (!user) {
+      await supabase.from('users').insert({
+        user_id: userId,
+        last_draw: 0,
+        last_pack: 0,
+        last_pick: 0
+      });
+    }
+
+    return userData[userId];
+  } catch (error) {
+    console.error('Error in getUserData:', error);
+    // Fallback to empty data
+    userData[userId] = {
+      inventory: [],
+      lastDraw: 0,
+      lastPack: 0,
+      lastPick: 0,
+      pickChoices: []
+    };
+    return userData[userId];
+  }
+}
+
+// Save user cooldowns to database
+async function saveUserCooldowns(userId, data) {
+  try {
+    await supabase
+      .from('users')
+      .upsert({
+        user_id: userId,
+        last_draw: data.lastDraw,
+        last_pack: data.lastPack,
+        last_pick: data.lastPick
+      });
+  } catch (error) {
+    console.error('Error saving cooldowns:', error);
+  }
+}
+
+// Add card to user's inventory in database
+async function addCardToInventory(userId, cardId, obtainedAt, instanceId) {
+  try {
+    const { error } = await supabase
+      .from('inventory')
+      .insert({
+        user_id: userId,
+        card_id: cardId,
+        obtained_at: obtainedAt,
+        instance_id: instanceId
+      });
+
+    if (error) {
+      console.error('Error adding card to inventory:', error);
+    }
+  } catch (error) {
+    console.error('Error in addCardToInventory:', error);
+  }
+}
+
+function randomCard() {
+  if (!cards.length) return null;
+  const i = Math.floor(Math.random() * cards.length);
+  return cards[i];
+}
+
+// Generate unique card instance ID (po1234 format)
+function generateCardInstanceId() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let id = 'po';
+  for (let i = 0; i < 4; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+// Create a card lookup map for faster inventory access
+const cardMap = new Map();
+
+// Image cache to avoid re-downloading
+const imageCache = new Map();
+
+// Combined image cache (for pick command)
+const combinedImageCache = new Map();
+
+// Pre-generated pick and pack pools
+const pickPool = [];
+const packPool = [];
+const PICK_POOL_SIZE = 20;
+const PACK_POOL_SIZE = 20;
+const REFILL_THRESHOLD = 15;
+
+// Server configuration (guild_id -> channel_id)
+const serverConfig = new Map();
+
+// Admin configuration (user_id -> boolean)
+const adminUsers = new Set();
+
+// Load server configurations from database
+async function loadServerConfigs() {
+  try {
+    const { data, error } = await supabase
+      .from('server_config')
+      .select('*');
+    
+    if (error) {
+      console.error('Error loading server configs:', error);
+      return;
+    }
+    
+    if (data) {
+      data.forEach(config => {
+        serverConfig.set(config.guild_id, config.channel_id);
+      });
+      console.log(`Loaded ${data.length} server configurations`);
+    }
+  } catch (error) {
+    console.error('Error in loadServerConfigs:', error);
+  }
+}
+
+// Load admins from database
+async function loadAdmins() {
+  try {
+    const { data, error } = await supabase
+      .from('admins')
+      .select('*');
+    
+    if (error) {
+      console.error('Error loading admins:', error);
+      return;
+    }
+    
+    if (data) {
+      adminUsers.clear();
+      data.forEach(admin => {
+        adminUsers.add(admin.user_id);
+      });
+      console.log(`Loaded ${data.length} admin users`);
+    }
+  } catch (error) {
+    console.error('Error in loadAdmins:', error);
+  }
+}
+
+// Add admin to database
+async function addAdmin(userId) {
+  try {
+    adminUsers.add(userId);
+    
+    await supabase
+      .from('admins')
+      .upsert({
+        user_id: userId
+      });
+    
+    return true;
+  } catch (error) {
+    console.error('Error adding admin:', error);
+    return false;
+  }
+}
+
+// Remove admin from database
+async function removeAdmin(userId) {
+  try {
+    adminUsers.delete(userId);
+    
+    await supabase
+      .from('admins')
+      .delete()
+      .eq('user_id', userId);
+    
+    return true;
+  } catch (error) {
+    console.error('Error removing admin:', error);
+    return false;
+  }
+}
+
+// Check if user is admin
+function isAdmin(userId) {
+  return adminUsers.has(userId);
+}
+
+// Set channel for a guild
+async function setGuildChannel(guildId, channelId) {
+  try {
+    serverConfig.set(guildId, channelId);
+    
+    await supabase
+      .from('server_config')
+      .upsert({
+        guild_id: guildId,
+        channel_id: channelId
+      });
+    
+    return true;
+  } catch (error) {
+    console.error('Error setting guild channel:', error);
+    return false;
+  }
+}
+
+// Check if command is allowed in this channel
+function isAllowedChannel(guildId, channelId) {
+  // If no config set for this guild, allow all channels
+  if (!serverConfig.has(guildId)) return true;
+  
+  // Check if this channel matches the configured channel
+  return serverConfig.get(guildId) === channelId;
+}
+
+// Function to fetch and cache image
+async function fetchAndCacheImage(url) {
+  // Check if already cached
+  if (imageCache.has(url)) {
+    return imageCache.get(url);
+  }
+
+  // Fetch and cache
+  const response = await axios.get(url, { responseType: 'arraybuffer' });
+  const buffer = Buffer.from(response.data);
+  const image = await loadImage(buffer);
+  
+  // Store in cache
+  imageCache.set(url, image);
+  
+  return image;
+}
+
+// Function to combine 3 card images horizontally
+async function combineCardImages(card1Url, card2Url, card3Url) {
+  try {
+    // Create cache key from the 3 URLs
+    const cacheKey = `${card1Url}|${card2Url}|${card3Url}`;
+    
+    // Check if this combination is already cached
+    if (combinedImageCache.has(cacheKey)) {
+      return combinedImageCache.get(cacheKey);
+    }
+
+    // Fetch all 3 images (with caching)
+    const [img1, img2, img3] = await Promise.all([
+      fetchAndCacheImage(card1Url),
+      fetchAndCacheImage(card2Url),
+      fetchAndCacheImage(card3Url)
+    ]);
+
+    // Balanced size for better Discord preview
+    const targetWidth = 500;
+    const targetHeight = 700;
+    const spacing = 50; // Space between cards
+    
+    const canvas = createCanvas(targetWidth * 3 + spacing * 2, targetHeight);
+    const ctx = canvas.getContext('2d');
+
+    // Transparent background (no white)
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw all 3 images side by side with spacing
+    ctx.drawImage(img1, 0, 0, targetWidth, targetHeight);
+    ctx.drawImage(img2, targetWidth + spacing, 0, targetWidth, targetHeight);
+    ctx.drawImage(img3, (targetWidth + spacing) * 2, 0, targetWidth, targetHeight);
+
+    const buffer = canvas.toBuffer('image/png');
+    
+    // Cache the combined result
+    combinedImageCache.set(cacheKey, buffer);
+    
+    return buffer;
+  } catch (error) {
+    console.error('Error combining images:', error);
+    return null;
+  }
+}
+
+// Function to combine 5 card images horizontally
+async function combinePackImages(urls) {
+  try {
+    // Create cache key from all URLs
+    const cacheKey = urls.join('|');
+    
+    // Check if this combination is already cached
+    if (combinedImageCache.has(cacheKey)) {
+      return combinedImageCache.get(cacheKey);
+    }
+
+    // Fetch all 5 images (with caching)
+    const images = await Promise.all(urls.map(url => fetchAndCacheImage(url)));
+
+    // Balanced size for better Discord preview
+    const targetWidth = 400;
+    const targetHeight = 560;
+    const spacing = 30; // Space between cards
+    
+    const canvas = createCanvas(targetWidth * 5 + spacing * 4, targetHeight);
+    const ctx = canvas.getContext('2d');
+
+    // Transparent background (no white)
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw all 5 images side by side with spacing
+    images.forEach((img, i) => {
+      const x = i * (targetWidth + spacing);
+      ctx.drawImage(img, x, 0, targetWidth, targetHeight);
+    });
+
+    const buffer = canvas.toBuffer('image/png');
+    
+    // Cache the combined result
+    combinedImageCache.set(cacheKey, buffer);
+    
+    return buffer;
+  } catch (error) {
+    console.error('Error combining pack images:', error);
+    return null;
+  }
+}
+
+function formatInventory(inv) {
+  if (!inv.length) return 'You have no cards yet 😢';
+
+  return inv
+    .map((entry, i) => {
+      const cardId = entry.card_id || entry.cardId; // Support both formats
+      const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
+      const name = card ? formatCardName(card.name) : 'Unknown';
+      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
+      const ownerId = entry.instance_id || 'N/A';
+      return `#${i} - **${name}** (${quality}) \`${ownerId}\``;
+    })
+    .join('\n');
+}
+
+function formatBinderEmbed(inv, page = 0) {
+  const CARDS_PER_PAGE = 10;
+  const embed = new EmbedBuilder()
+    .setColor('#FFD700')
+    .setTitle('📖 Your Card Binder')
+    .setTimestamp();
+
+  if (!inv.length) {
+    embed.setDescription('Your binder is empty. Start collecting cards!');
+    return { embed, totalPages: 1 };
+  }
+
+  // Group cards by set
+  const bySet = {};
+  inv.forEach((entry, i) => {
+    const cardId = entry.card_id || entry.cardId;
+    const card = cardMap.get(cardId) || cards.find(c => c.id === cardId);
+    if (card) {
+      if (!bySet[card.set]) bySet[card.set] = [];
+      bySet[card.set].push({ index: i, card });
+    }
+  });
+
+  // Flatten all cards for pagination
+  const allCards = [];
+  for (const [setName, items] of Object.entries(bySet)) {
+    allCards.push({ type: 'header', setName, count: items.length });
+    allCards.push(...items.map(item => ({ type: 'card', ...item, entry: inv[item.index] })));
+  }
+
+  const totalPages = Math.ceil(allCards.length / CARDS_PER_PAGE);
+  const startIdx = page * CARDS_PER_PAGE;
+  const endIdx = startIdx + CARDS_PER_PAGE;
+  const pageCards = allCards.slice(startIdx, endIdx);
+
+  let description = '';
+  for (const item of pageCards) {
+    if (item.type === 'header') {
+      description += `\n**${item.setName}** (${item.count})\n`;
+    } else if (item.type === 'card') {
+      const ownerId = item.entry?.instance_id || 'N/A';
+      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
+      description += `#${item.index + 1} **${formatCardName(item.card.name)}** (${quality}) \`${ownerId}\`\n`;
+    }
+  }
+
+  embed.setDescription(description || 'No cards on this page.');
+  embed.setFooter({ text: `Page ${page + 1}/${totalPages} | Total Cards: ${inv.length}` });
+  
+  return { embed, totalPages };
+}
+
+function msToNice(ms) {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+// Format card names: remove underscores and uppercase
+function formatCardName(name) {
+  if (!name) return 'Unknown';
+  return name
+    .replace(/_/g, ' ') // Replace underscores with spaces
+    .toUpperCase(); // Convert to uppercase
+}
 
 // ------------------- SLASH COMMANDS -------------------
 const commands = [
@@ -288,7 +913,7 @@ client.on('messageCreate', async message => {
   // cd binder
   if (command === 'cd binder' || command === 'cd b' || command === 'binder') {
     const page = 0;
-    const { embed, totalPages } = formatBinderEmbed(data.inventory, page, 10, cardMap, formatCardName);
+    const { embed, totalPages } = formatBinderEmbed(data.inventory, page);
     
     if (totalPages <= 1) {
       return message.reply({ embeds: [embed] });
@@ -341,15 +966,15 @@ client.on('messageCreate', async message => {
         new ButtonBuilder()
           .setCustomId('btn_pick_0')
           .setLabel('1️⃣')
-          .setStyle(ButtonStyle.Secondary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_1')
           .setLabel('2️⃣')
-          .setStyle(ButtonStyle.Secondary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_2')
           .setLabel('3️⃣')
-          .setStyle(ButtonStyle.Secondary)
+          .setStyle(ButtonStyle.Success)
       );
 
     return message.reply({
@@ -676,7 +1301,7 @@ client.on('interactionCreate', async interaction => {
       const isNext = customId.startsWith('binder_next_');
       const newPage = isNext ? currentPage + 1 : currentPage - 1;
       
-      const { embed, totalPages } = formatBinderEmbed(data.inventory, newPage, 10, cardMap, formatCardName);
+      const { embed, totalPages } = formatBinderEmbed(data.inventory, newPage);
       
       const row = new ActionRowBuilder()
         .addComponents(
@@ -708,14 +1333,26 @@ client.on('interactionCreate', async interaction => {
         card.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
 
-      const CARDS_PER_PAGE = 10;
+      const CARDS_PER_PAGE = 5;
       const totalPages = Math.ceil(matchingCards.length / CARDS_PER_PAGE);
       const pageCards = matchingCards.slice(newPage * CARDS_PER_PAGE, (newPage + 1) * CARDS_PER_PAGE);
 
       let description = '';
       for (const card of pageCards) {
-        const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
-        description += `**${formatCardName(card.name)}** - ${card.set} • ${quality}\n`;
+        const owners = [];
+        for (const [userId, userDataObj] of Object.entries(userData)) {
+          const owned = userDataObj.inventory.filter(entry => {
+            const cardId = entry.card_id || entry.cardId;
+            return cardId === card.id;
+          });
+          if (owned.length > 0) {
+            const instanceIds = owned.map(e => e.instance_id).filter(Boolean).join(', ');
+            owners.push(`<@${userId}> (${instanceIds})`);
+          }
+        }
+
+        const ownerText = owners.length > 0 ? owners.join(', ') : 'Unclaimed';
+        description += `**${formatCardName(card.name)}** - ${card.set}\n└ Owners: ${ownerText}\n\n`;
       }
 
       const embed = new EmbedBuilder()
@@ -783,9 +1420,9 @@ client.on('interactionCreate', async interaction => {
   const now = Date.now();
 
   // Safety: no cards loaded
-  if ((commandName === 'draw' || commandName === 'pack' || commandName === 'pick') && !cards.length) {
+  if ((commandName === 'draw' || commandName === 'pack') && !cards.length) {
     return interaction.reply({
-      content: '⏳ Bot is still loading cards... Please wait a moment and try again.',
+      content: '❌ No cards are configured yet. Ask the admin to upload some images to the Supabase bucket.',
       ephemeral: true
     });
   }
@@ -844,14 +1481,8 @@ client.on('interactionCreate', async interaction => {
     const pack = getPackFromPool();
     
     if (!pack) {
-      return interaction.reply({
-        content: '❌ No packs available right now. Try again in a moment.',
-        ephemeral: true
-      });
+      return interaction.reply('❌ No packs available right now. Try again in a moment.');
     }
-
-    // Defer reply immediately since database writes may take time
-    await interaction.deferReply();
 
     const { cards: pulled, imageBuffer } = pack;
 
@@ -873,7 +1504,7 @@ client.on('interactionCreate', async interaction => {
       details += `• **${formatCardName(card.name)}** - ${quality} | ${card.set}\n`;
     });
 
-    return interaction.editReply({
+    return interaction.reply({
       content: details,
       files: [attachment]
     });
@@ -888,7 +1519,7 @@ client.on('interactionCreate', async interaction => {
     const binderData = await getUserData(user.id);
     
     const page = 0;
-    const { embed, totalPages } = formatBinderEmbed(binderData.inventory, page, 10, cardMap, formatCardName);
+    const { embed, totalPages } = formatBinderEmbed(binderData.inventory, page);
     
     if (totalPages <= 1) {
       return interaction.editReply({ embeds: [embed] });
@@ -1081,15 +1712,30 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    // Build paginated embed
-    const CARDS_PER_PAGE = 10;
+    await interaction.deferReply();
+
+    // Build paginated embed with ownership info
+    const CARDS_PER_PAGE = 5;
     const totalPages = Math.ceil(matchingCards.length / CARDS_PER_PAGE);
     const pageCards = matchingCards.slice(page * CARDS_PER_PAGE, (page + 1) * CARDS_PER_PAGE);
 
     let description = '';
     for (const card of pageCards) {
-      const quality = `PSA ${Math.floor(Math.random() * 10) + 1}`;
-      description += `**${formatCardName(card.name)}** - ${card.set} • ${quality}\n`;
+      // Search all loaded user inventories for this card
+      const owners = [];
+      for (const [userId, userDataObj] of Object.entries(userData)) {
+        const owned = userDataObj.inventory.filter(entry => {
+          const cardId = entry.card_id || entry.cardId;
+          return cardId === card.id;
+        });
+        if (owned.length > 0) {
+          const instanceIds = owned.map(e => e.instance_id).filter(Boolean).join(', ');
+          owners.push(`<@${userId}> (${instanceIds})`);
+        }
+      }
+
+      const ownerText = owners.length > 0 ? owners.join(', ') : 'Unclaimed';
+      description += `**${card.name}** - ${card.set}\n└ Owners: ${ownerText}\n\n`;
     }
 
     const embed = new EmbedBuilder()
@@ -1231,32 +1877,31 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'help') {
     return interaction.reply({
       content: 
-        '**🎴 Card Game Commands**\n\n' +
+        '**Card Game Commands:**\n\n' +
         '**Text Commands:**\n' +
-        '`cd` or `cd draw` - Draw 1 random card (15 min cooldown)\n' +
-        '`cd pack` or `cd p` - Open a pack of 5 cards (24 hour cooldown)\n' +
-        '`pick` or `pk` - Pick 1 card from 3 choices (30 min cooldown)\n' +
-        '`cd inventory`, `cd inv`, or `cd i` - View your card collection\n' +
-        '`binder`, `cd binder`, or `cd b` - View organized binder with pagination\n' +
-        '`help` or `cd help` - Show this help menu\n\n' +
+        '`cd` or `cd draw` - Draw a card (15 min cooldown)\n' +
+        '`cd pack` or `cd p` - Open a pack of 5 cards (10 min cooldown)\n' +
+        '`pick` or `pk` - Pick 1 from 3 cards (30 min cooldown)\n' +
+        '`cd inventory`, `cd inv`, or `cd i` - View your collection\n' +
+        '`binder`, `cd binder`, or `cd b` - View organized binder\n' +
+        '`help` or `cd help` - Show this help\n\n' +
         '**Slash Commands:**\n' +
-        '`/draw` - Draw 1 random card (15 min cooldown)\n' +
-        '`/pack` - Open a pack of 5 cards (24 hour cooldown)\n' +
-        '`/pick` - Pick 1 card from 3 choices (30 min cooldown)\n' +
-        '`/binder` - View your organized card binder\n' +
-        '`/menu` - Interactive button menu for all commands\n' +
-        '`/search <name>` - Search for cards by name in your collection\n' +
-        '`/view <card_id>` - View details of a specific card by instance ID\n' +
-        '`/trade <card_id> <@user>` - Trade a card to another player\n' +
-        '`/burn <card_id>` - Permanently delete a card from your collection\n' +
-        '`/clearbinder <username>` - Clear your entire collection (type your username to confirm)\n' +
-        '`/reset_me` - Reset all your data (testing only)\n\n' +
+        '`/draw` - Draw a card\n' +
+        '`/pack` - Open a pack\n' +
+        '`/pick` - Pick from 3 cards\n' +
+        '`/binder` - View organized binder\n' +
+        '`/menu` - Interactive button menu\n' +
+        '`/search <name>` - Search for cards by name\n' +
+        '`/view <card>` - View a specific card\n' +
+        '`/trade <card> <@trainer>` - Trade a card to another trainer\n' +
+        '`/burn <card>` - Burn a card (permanent deletion)\n' +
+        '`/clearbinder <confirm>` - Clear your entire collection (type your username)\n' +
+        '`/reset_me` - Reset your data (testing)\n\n' +
         '**Admin Commands:**\n' +
-        '`/setchannel <channel>` - Restrict bot commands to specific channel\n' +
-        '`/channelinfo` - View current channel restrictions\n' +
-        '`/setadmin <user> <add/remove>` - Add or remove bot administrators\n\n' +
-        '**📦 Available Card Sets:** Base Set 2, Crown Zenith, Vivid Voltage, Evolving Skies, Fusion Strike, Sword & Shield Promos, Evolution, Ultra Prism, Darkness Ablaze, Black & White, Diamond & Pearl, Astral Radiance\n\n' +
-        '**💎 Card Quality:** All cards display PSA quality rating (1-10)',
+        '`/setchannel <channel>` - Restrict commands to a channel (Admin)\n' +
+        '`/channelinfo` - View channel restrictions\n' +
+        '`/setadmin <user> <add/remove>` - Manage bot admins (Admin)\n' +
+        '`/help` - Show this help',
       ephemeral: true
     });
   }
@@ -1306,15 +1951,15 @@ client.on('interactionCreate', async interaction => {
         new ButtonBuilder()
           .setCustomId('btn_pick_0')
           .setLabel('1️⃣')
-          .setStyle(ButtonStyle.Secondary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_1')
           .setLabel('2️⃣')
-          .setStyle(ButtonStyle.Secondary),
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('btn_pick_2')
           .setLabel('3️⃣')
-          .setStyle(ButtonStyle.Secondary)
+          .setStyle(ButtonStyle.Success)
       );
 
     return interaction.reply({
